@@ -24,19 +24,19 @@ description:
    - Run various icinga2 pki commands with some additional actions not provided by stock Icinga2. All file name are based on C(common-name).
 options:
    action:
-     choices: ['new-ca', 'new-cert', 'new-csr', 'new-key', 'new-signed-cert', 'request', 'save-cert', 'sign-csr', 'ticket']
+     choices: ['new-ca', 'new-cert', 'new-csr', 'new-key', 'CA-signed-cert', 'request', 'save-cert', 'sign-csr', 'ticket']
      description:
         - C(new-ca) creates a new certificate authority.
         - C(new-cert) creates a new private key and self signed certificate.
         - C(new-csr) creates a new private key and csr.
         - C(new-key) creates a new private key.
-        - C(new-signed-cert) creates key and certificate signed with CA cert
-        - C(request) not implemented, use M(fetch) instead.
-        - C(save-cert) not implemented, use M(fetch) instead.
+        - C(CA-signed-cert) creates key and certificate signed with CA cert
+        - C(request) request csr signing by master Icinga2 host
+        - C(save-cert) fetch certificate from another Icinga2 host
         - C(sign-csr) sign an existing csr to with the CA cert
         - C(ticket) generates a new ticket.
      required: yes
-   force: 
+   force:
      choices: [ "yes", "no" ]
      default: "no"
      description:
@@ -49,7 +49,7 @@ EXAMPLES = '''
 - icinga2_pki: action=new-ca
 
 # create cert signed by CA
-- icinga2_pki: action=new-signed-cert common_name=foo
+- icinga2_pki: action=CA-signed-cert common_name=foo
 
 # create self signed cert
 - icinga2_pki: action=new-cert common_name=foo
@@ -82,9 +82,8 @@ def _new_ca(module):
             stdout)
     elif result != 0:
         module.fail_json(msg=stdout)
-    else:
-        module.exit_json(changed=True, msg="new CA created at %s" %
-            module.params['ca_path'], stdout=stdout)
+
+    return stdout
 
 
 def _new_cert(module):
@@ -95,52 +94,83 @@ def _new_cert(module):
 
     remove_files(module)
 
-    if module.params['action'] == "new-key":
-        cmd = ("%s pki new-cert --cn %s --key %s" %
-               (module.params['icinga2_binary'], module.params['common_name'],
+    cmd = ("%s pki new-cert --cn %s --key %s" %
+            (module.params['icinga2_binary'], module.params['common_name'],
                 module.params['key_file']))
-    elif (module.params['action'] == "new-csr" or
-        module.params['action'] == "new-signed-cert"):
-        cmd = ("%s pki new-cert --cn %s --key %s --csr %s" %
-               (module.params['icinga2_binary'], module.params['common_name'],
-                module.params['key_file'], module.params['csr_file']))
-    elif module.params['action'] == "new-cert":
-        cmd = ("%s pki new-cert --cn %s --key %s --cert %s" %
-               (module.params['icinga2_binary'], module.params['common_name'],
-                module.params['key_file'], module.params['crt_file']))
-    run_cmd(module, cmd)
-    return 0
+
+    if (module.params['action'] == "new-csr" or module.params['action'] == "CA-signed-cert"):
+        cmd += " --csr %s" % module.params['csr_file']
+
+    if (module.params['action'] == "new-cert" or module.params['action'] == "CA-signed-cert"):
+        cmd += " --cert %s" % module.params['crt_file']
+
+    msg = run_cmd(module, cmd)
+    return msg
+
 
 def _request(module):
-    module.exit_json(changed=False,
-                     msg="Not implemented. Use 'fetch' module instead")
+    if not module.params['common_name']:
+        module.fail_json(msg="common_name is required for the 'request' action")
+    if not module.params['master_host']:
+        module.fail_json(msg="master icinga2 host is required for the 'request' action")
+    if not module.params['ticket']:
+        module.fail_json(msg="ticket is required for the 'request' action")
+    cmd= "%s pki request --key %s --cert %s --trustedcert %s --host %s --port %s --ca %s --ticket %s" % (
+        module.params['icinga2_binary'],
+        module.params['key_file'],
+        module.params['crt_file'],
+        module.params['master_file'],
+        module.params['master_host'],
+        module.params['master_port'],
+        module.params['ca_file'],
+        module.params['ticket'])
+    msg = run_cmd(module, cmd)
+    return msg
+
+
+def _save_cert(module):
+
+    if not module.params['common_name']:
+        module.fail_json(msg="common_name is required for the 'save-cert' action")
+    if not module.params['master_host']:
+        module.fail_json(msg="master icinga2 host is required for the 'save-cert' action")
+
+    cmd= "%s pki save-cert --key %s --cert %s --trustedcert %s --host %s" % (
+        module.params['icinga2_binary'],
+        module.params['key_file'],
+        module.params['crt_file'],
+        module.params['master_file'],
+        module.params['master_host'])
+    msg = run_cmd(module, cmd)
+    return msg
+
 
 def _sign_csr(module):
 
     if not module.params['common_name']:
-        module.fail_json(
-            msg="common_name is required for the 'sign-csr' action")
+        module.fail_json(msg="common_name is required for the 'sign-csr' action")
 
-    if not os.path.isfile(module.params['ca_file']):
-        module.fail_json(
-            msg="no ca.crt file is present at %s. Try 'action=new-ca'" %
-            module.params['ca_file'])
+#    if not os.path.isfile(module.params['ca_file']):
+#        module.fail_json(
+#            msg="no ca.crt file is present at %s. Try 'action=new-ca'" %
+#            module.params['ca_file'])
     if not os.path.isfile(module.params['csr_file']):
         module.fail_json(
             msg="no csr file is present at %s. Try 'action=new-csr'" %
             module.params['csr_file'])
-    if os.path.isfile(module.params['crt_file']) and not module.params['force'
-                                                                       ]:
+    if os.path.isfile(module.params['crt_file']) and not module.params['force']:
         module.fail_json(
             msg=
             "Certificate already exist for common_name '%s'. Use 'force=yes' to replace"
             % module.params['common_name'])
 
     cmd = "%s pki sign-csr --csr %s --cert %s" % (
-        module.params['icinga2_binary'], module.params['csr_file'],
+        module.params['icinga2_binary'],
+        module.params['csr_file'],
         module.params['crt_file'])
     run_cmd(module, cmd)
-    return 0
+# sign-csr produces no output when run successfully
+    return "Writing self signed cert for cn=%s to %s" % (module.params['common_name'],module.params['crt_file'])
 
 
 def _ticket(module):
@@ -199,9 +229,13 @@ def run_cmd(module, cmd):
         module.fail_json(
             msg="This command must be run as root or the 'nagios' user: %s" %
             stdout)
+    elif re.match(r'critical/SSL: Could not open CA key file', stdout, re.S):
+        module.fail_json(
+            msg="no ca.crt file is present at %s. Try 'action=new-ca'" %
+            module.params['ca_file'])
     elif result != 0:
         module.fail_json(msg="Couldn't create %s: %s" % (module.params['action'], stdout))
-
+    return stdout
 
 def main():
     module = AnsibleModule(
@@ -209,46 +243,58 @@ def main():
             action=dict(
                 required=True,
                 choices=['new-ca', 'new-key', 'new-csr', 'new-cert',
-                         'new-signed-cert', 'request', 'save-cert', 'sign-csr',
+                         'CA-signed-cert', 'request', 'save-cert', 'sign-csr',
                          'ticket']),
             force=dict(type='bool', default='no'),
             common_name=dict(type='str', required=False),
             ca_path=dict(type='str',
                          required=False,
                          default='/var/lib/icinga2/ca'),
+            pki_path=dict(type='str',
+                         required=False,
+                         default='/etc/icinga2/pki'),
             salt=dict(type='str', required=False),
+            master_host=dict(type='str', required=False),
+            master_port=dict(type='str', required=False, default='5665'),
+            ticket=dict(type='str', required=False),
+            zone=dict(type='str', required=False),
             ),
         )
 
     module.params['ca_file'] = "%s/ca.crt" % module.params['ca_path']
-    module.params['key_file'] = "%s/%s.key" % (module.params['ca_path'],
+    module.params['key_file'] = "%s/%s.key" % (module.params['pki_path'],
         module.params['common_name'])
-    module.params['csr_file'] = "%s/%s.csr" % (module.params['ca_path'],
+    module.params['csr_file'] = "%s/%s.csr" % (module.params['pki_path'],
         module.params['common_name'])
-    module.params['crt_file'] = "%s/%s.crt" % (module.params['ca_path'],
+    module.params['crt_file'] = "%s/%s.crt" % (module.params['pki_path'],
         module.params['common_name'])
+    module.params['master_file'] = "%s/trusted-master.crt" % (module.params['pki_path'])
     module.params['icinga2_binary'] = get_icinga2_binary(module)
 
     if module.params['action'] == 'new-ca':
-        _new_ca(module)
+        msg = _new_ca(module)
     if module.params['action'] == 'new-key':
-        _new_cert(module)
+        msg = _new_cert(module)
     if module.params['action'] == 'new-csr':
-        _new_cert(module)
+        msg = _new_cert(module)
     if module.params['action'] == 'new-cert':
-        _new_cert(module)
+        msg = _new_cert(module)
     if module.params['action'] == 'ticket':
         _ticket(module)
-    if (module.params['action'] == 'request' or
-        module.params['action'] == 'save-cert'):
-        _request(module)
+    if module.params['action'] == 'request':
+        module.params['ca_file'] = "%s/ca.crt" % module.params['pki_path']
+        msg = _request(module)
+    if module.params['action'] == 'save-cert':
+        msg = _save_cert(module)
     if module.params['action'] == 'sign-csr':
-        _sign_csr(module)
-    if module.params['action'] == 'new-signed-cert':
-        _new_cert(module)
-        _sign_csr(module)
+        msg = _sign_csr(module)
+    if module.params['action'] == 'CA-signed-cert':
+        msg = _new_cert(module)
+        msg += _save_cert(module)
+        module.params['ca_file'] = "%s/ca.crt" % module.params['pki_path']
+        msg += _request(module)
 
-    module.exit_json(changed=True)
+    module.exit_json(changed=True, msg=msg)
 
 
 from ansible.module_utils.basic import *
