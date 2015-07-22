@@ -7,7 +7,7 @@ Modules for the Icinga2 cli. Implemented so far:
 
 Tested on Debian 8 with Icinga2 from [Debmon](http://debmon.org/).
 
-# Using the pki module to create a CA signed certificate.
+## Using the pki module to create a CA signed certificate.
 
 Tasks in a play to create a CA signed client certificate:
 
@@ -50,7 +50,7 @@ Alternatively the three client side actions can be rolled up into the
 
 You'll still need to provide the pki ticket.
 
-# Notes
+## Notes
 
 Icinga2 requires all tasks must be run as root.
 
