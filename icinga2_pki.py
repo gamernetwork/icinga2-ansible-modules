@@ -36,11 +36,34 @@ options:
         - C(sign-csr) sign an existing csr to with the CA cert
         - C(ticket) generates a new ticket.
      required: yes
+   ca_path:
+     description: 
+       - Path to icinga2 CA directory.
+     default: /var/lib/icinga2/ca
+   creates:
+     description:
+       - Skip task if file exists. Overridden with C(force).
+   common_name:
+     description:
+       - Common name for key.
    force:
      choices: [ "yes", "no" ]
      default: "no"
      description:
-       - remove existing CA or files assocatied with common_name
+       - Remove existing CA or files assocatied with common_name.
+   master_host:
+     description:
+       - Hostname of server hosting the Icinga2 CA.
+   pki_path:
+     description: 
+       - Path to icinga2 pki directory
+     default: /etc/icinga2/pki
+   salt:
+     description:
+       - Salt for C(ticket) action if not set in Icinga config.
+   ticket:
+     description:
+       - Ticket from Icinga2 CA for certificate signing.
 
 '''
 
@@ -88,11 +111,12 @@ def _new_ca(module):
 
 def _new_cert(module):
 
+    msg =""
     if not module.params['common_name']:
         module.fail_json(
             msg="common_name is required for the 'new-cert' action")
 
-    remove_files(module)
+    msg += remove_files(module)
 
     cmd = ("%s pki new-cert --cn %s --key %s" %
             (module.params['icinga2_binary'], module.params['common_name'],
@@ -104,7 +128,7 @@ def _new_cert(module):
     if (module.params['action'] == "new-cert" or module.params['action'] == "CA-signed-cert"):
         cmd += " --cert %s" % module.params['crt_file']
 
-    msg = run_cmd(module, cmd)
+    msg += run_cmd(module, cmd)
     return msg
 
 
@@ -206,22 +230,25 @@ def get_icinga2_binary(module):
 
 
 def remove_files(module):
-
+    msg =""
     if (os.path.isfile(module.params['key_file']) or
         os.path.isfile(module.params['csr_file']) or
         os.path.isfile(module.params['crt_file'])):
         if module.params['force']:
             if os.path.isfile(module.params['key_file']):
                 os.unlink(module.params['key_file'])
+                msg += " Removed file %s." % module.params['key_file']
             if os.path.isfile(module.params['csr_file']):
                 os.unlink(module.params['csr_file'])
+                msg += " Removed file %s." % module.params['csr_file']
             if os.path.isfile(module.params['crt_file']):
                 os.unlink(module.params['crt_file'])
+                msg += " Removed file %s." % module.params['crt_file']
         else:
-            module.fail_json(
-                msg=
-                "Files already exist for common_name '%s'. Use 'force=yes' to replace"
+            module.fail_json(msg=
+                "Files already exist for common_name '%s'. Use 'force=yes' to replace or 'creates' to ignore"
                 % module.params['common_name'])
+        return msg
 
 def run_cmd(module, cmd):
     result, stdout, stderr = module.run_command(cmd)
@@ -258,8 +285,14 @@ def main():
             master_port=dict(type='str', required=False, default='5665'),
             ticket=dict(type='str', required=False),
             zone=dict(type='str', required=False),
+            creates=dict(type='str', required=False),
             ),
         )
+
+    if module.params['creates'] and not module.params['force']:
+        if os.path.isfile(module.params['creates']):
+            module.exit_json(changed=False, msg="%s already exists. Skipping task."
+                % module.params['creates'])
 
     module.params['ca_file'] = "%s/ca.crt" % module.params['ca_path']
     module.params['key_file'] = "%s/%s.key" % (module.params['pki_path'],
