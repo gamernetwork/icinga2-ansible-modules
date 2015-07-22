@@ -26,7 +26,7 @@ Tasks in a play to create a CA signed client certificate:
       icinga2_pki:
         action: ticket
         common_name: "{{ ansible_fqdn }}"
-      register: icinga_
+      register: icinga
       delegate_to: icinga2.example.com
 
     - name: get csr signed by icinga master
